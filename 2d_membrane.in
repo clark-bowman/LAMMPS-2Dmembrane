@@ -1,0 +1,100 @@
+# LAMMPS Script - 2D Bilipid Membrane, DPD Fluid (clark_bowman@brown.edu)
+# LAMMPS version Aug. 10, 2015
+
+
+
+
+
+# SEC: This section initializes the simulation.
+
+# 	Define units, atom style, log path, and neighbor settings; read configuration data for the membrane.
+# 	Configuration data for the membrane in 2d_membrane.dat must be generated separately.
+# 	Final line communicates ghost data and is necessary for DPD parallelizing. On some versions of LAMMPS, use instead `communicate single vel yes'
+
+dimension 2
+
+units lj
+atom_style molecular
+log 2d_membrane.log
+read_data 2d_membrane.dat
+neighbor 0.3 bin
+neigh_modify delay 3
+comm_modify vel yes
+
+# 	Define bond, angle, pairwise interactions.
+# 	For pairwise interactions: type 1 is lipid head, 2 is lipid tail, 3 is water.
+#   914522 is a temperature seed; change for different randomness.
+
+bond_style harmonic
+bond_coeff 1 64.0 0.5
+bond_coeff 2 64.0 0.8
+angle_style cosine/delta
+angle_coeff 1 50 180.0
+angle_coeff 2 50 40
+angle_coeff 3 50 20
+
+pair_style dpd 0.1 2.5 914522
+special_bonds lj 0.5 1.0 1.0
+pair_coeff 1 1 15 4.5 2.5
+pair_coeff 1 3 35 4.5 1.75
+pair_coeff 2 3 75 20 1
+pair_coeff 1 2 50 9 1.75
+pair_coeff 3 3 25 4.5 1.0
+pair_coeff 2 2 15 4.5 1
+
+# SEC: This section initializes the geometry.
+
+#   Define safe regions where fluid may be placed. This is region outside the membrane initialization block.
+
+region safe block 15.5 80.5 28.5 35.5 -0.1 0.1 side out
+lattice sq 2
+create_atoms 3 region safe
+
+# SEC: This section defines LAMMPS groups and computes that will be used in the simulation.
+
+# 	Groups are named indicatively of their membership.
+# 	Computes include the positions of marked lipids, which are used to compute curvature.
+
+group fluid type 3
+group membrane type 1 2
+group head1 id 105
+group head2 id 911
+group tail1 id 111 117
+group tail2 id 917 923
+compute mx membrane property/atom xu
+compute my membrane property/atom yu
+compute h1x head1 reduce ave c_mx
+compute h1y head1 reduce ave c_my
+compute h2x head2 reduce ave c_mx
+compute h2y head2 reduce ave c_my
+compute t1x tail1 reduce ave c_mx
+compute t1y tail1 reduce ave c_my
+compute t2x tail2 reduce ave c_mx
+compute t2y tail2 reduce ave c_my
+variable ang_pre equal 'abs(atan2(c_t1y-c_h1y,c_t1x-c_h1x)-atan2(c_t2y-c_h2y,c_t2x-c_h2x))'
+variable ang equal 'v_ang_pre + 2 * (v_ang_pre > PI) * (PI - v_ang_pre)'
+variable dist2 equal '(c_t1x-c_t2x)^2+(c_t1y-c_t2y)^2'
+variable curv equal '2*sin(v_ang*0.5)/sqrt(v_dist2)'
+
+# SEC: This section initializes the particle velocities.
+
+velocity all create 0.1 23473
+
+# SEC: This section defines fixes to impose forces in the simulation.
+
+# 	NVE integration.
+# 	Fix 0 prevents particles from moving out of the X-Y plane.
+# 	Fix 4 records the curvature.
+
+# 	Simulation timestep (LJ time units).
+timestep 0.03
+thermo 10000
+fix 0 all enforce2d
+fix 1 all nve/limit 0.05
+
+# 	Equilibration phase, followed by data recording.
+run 20000
+fix 4 all ave/time 1 100 100 v_curv file curvature.out
+#dump 1 all atom 500 2dmembrane.lammpstrj
+run 30000
+
